@@ -8,6 +8,7 @@ mod billing;
 pub mod config;
 pub mod db;
 pub mod github_app;
+pub mod linear;
 pub mod mail;
 mod middleware;
 pub mod mutation_definition;
@@ -19,6 +20,7 @@ pub mod shape_route;
 pub mod shape_routes;
 pub mod shapes;
 mod shared_key_auth;
+pub mod slack;
 mod state;
 
 use std::env;

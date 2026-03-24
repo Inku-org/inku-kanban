@@ -9,6 +9,7 @@ use axum::{
     http::StatusCode,
     routing::post,
 };
+use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 use uuid::Uuid;
@@ -332,6 +333,22 @@ async fn create_issue(
         }
     }
 
+    if let Some(enc_key) = state
+        .config()
+        .linear_encryption_key
+        .as_ref()
+        .map(|k| k.expose_secret().to_string())
+    {
+        let (pool, http, id) = (
+            state.pool().clone(),
+            state.http_client.clone(),
+            response.data.id,
+        );
+        tokio::spawn(async move {
+            crate::linear::outbound::push_issue_to_linear(&pool, &http, &enc_key, id).await;
+        });
+    }
+
     Ok(Json(response))
 }
 
@@ -395,6 +412,31 @@ async fn update_issue(
 
     notify_issue_update_changes(&state, organization_id, ctx.user.id, &issue, &data).await;
 
+    if let Some(enc_key) = state
+        .config()
+        .linear_encryption_key
+        .as_ref()
+        .map(|k| k.expose_secret().to_string())
+    {
+        let (pool, http, id) = (state.pool().clone(), state.http_client.clone(), issue_id);
+        tokio::spawn(async move {
+            crate::linear::outbound::push_issue_to_linear(&pool, &http, &enc_key, id).await;
+        });
+    }
+
+    if data.status_id != issue.status_id
+        && let Some(enc_key) = state
+            .config()
+            .linear_encryption_key
+            .as_ref()
+            .map(|k| k.expose_secret().to_string())
+    {
+        let (pool, http, id) = (state.pool().clone(), state.http_client.clone(), issue_id);
+        tokio::spawn(async move {
+            crate::slack::notify::notify_status_change(&pool, &http, &enc_key, id).await;
+        });
+    }
+
     Ok(Json(MutationResponse { data, txid }))
 }
 
@@ -438,6 +480,19 @@ async fn delete_issue(
         }
     };
 
+    let linear_link = crate::linear::db::get_link_for_vk_issue(state.pool(), issue_id)
+        .await
+        .ok()
+        .flatten();
+    let linear_conn = if linear_link.is_some() {
+        crate::linear::db::get_connection_for_project(state.pool(), issue.project_id)
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+
     let response = IssueRepository::delete(state.pool(), issue_id)
         .await
         .map_err(|error| {
@@ -457,6 +512,29 @@ async fn delete_issue(
         None,
     )
     .await;
+
+    if let (Some(link), Some(conn)) = (linear_link, linear_conn)
+        && let Some(enc_key) = state
+            .config()
+            .linear_encryption_key
+            .as_ref()
+            .map(|k| k.expose_secret().to_string())
+    {
+        let (http, linear_issue_id, encrypted_api_key) = (
+            state.http_client.clone(),
+            link.linear_issue_id,
+            conn.encrypted_api_key,
+        );
+        tokio::spawn(async move {
+            crate::linear::outbound::delete_linear_issue(
+                &http,
+                &enc_key,
+                &encrypted_api_key,
+                &linear_issue_id,
+            )
+            .await;
+        });
+    }
 
     Ok(Json(response))
 }
@@ -575,6 +653,37 @@ async fn bulk_update_issues(
     for (old_issue, new_issue) in &notification_pairs {
         notify_issue_update_changes(&state, organization_id, ctx.user.id, old_issue, new_issue)
             .await;
+    }
+
+    if let Some(enc_key) = state
+        .config()
+        .linear_encryption_key
+        .as_ref()
+        .map(|k| k.expose_secret().to_string())
+    {
+        let issue_ids: Vec<Uuid> = results.iter().map(|i| i.id).collect();
+        let (pool, http) = (state.pool().clone(), state.http_client.clone());
+        let enc_key_clone = enc_key.clone();
+        tokio::spawn(async move {
+            for id in issue_ids {
+                crate::linear::outbound::push_issue_to_linear(&pool, &http, &enc_key_clone, id)
+                    .await;
+            }
+        });
+
+        let status_changed_ids: Vec<Uuid> = notification_pairs
+            .iter()
+            .filter(|(old, new)| old.status_id != new.status_id)
+            .map(|(_, new)| new.id)
+            .collect();
+        if !status_changed_ids.is_empty() {
+            let (pool, http) = (state.pool().clone(), state.http_client.clone());
+            tokio::spawn(async move {
+                for id in status_changed_ids {
+                    crate::slack::notify::notify_status_change(&pool, &http, &enc_key, id).await;
+                }
+            });
+        }
     }
 
     Ok(Json(BulkUpdateIssuesResponse {
