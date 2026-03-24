@@ -74,8 +74,19 @@ impl WorktreeManager {
 
             tokio::task::spawn_blocking(move || {
                 let repo = Repository::open(&repo_path_owned)?;
-                let base_branch_ref =
-                    GitService::find_branch(&repo, &base_branch_owned)?.into_reference();
+                // Prefer the remote tracking branch (e.g. origin/main) over the local branch,
+                // since the local branch may be checked out in the main worktree and could be
+                // behind or impossible to update via fetch refspec.
+                let remote_tracking = format!("origin/{base_branch_owned}");
+                let base_branch_ref = repo
+                    .find_branch(&remote_tracking, git2::BranchType::Remote)
+                    .ok()
+                    .map(|b| b.into_reference())
+                    .unwrap_or_else(|| {
+                        GitService::find_branch(&repo, &base_branch_owned)
+                            .expect("base branch not found")
+                            .into_reference()
+                    });
                 repo.branch(
                     &branch_name_owned,
                     &base_branch_ref.peel_to_commit()?,

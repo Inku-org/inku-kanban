@@ -134,35 +134,35 @@ impl ManagedWorkspace {
             .await?
             .ok_or(RepoError::NotFound)?;
 
-        if !git.check_branch_exists(&repo.path, &repo_ref.target_branch)? {
-            // Branch doesn't exist locally. Check if it exists on the default remote and fetch
-            // it if so. If there's no remote or the branch isn't on the remote, give up.
-            let fetched = git
-                .get_default_remote(&repo.path)
-                .ok()
-                .and_then(|remote| {
-                    let exists = git
-                        .check_remote_branch_exists(
-                            &repo.path,
-                            &remote.url,
-                            &repo_ref.target_branch,
-                        )
-                        .unwrap_or(false);
-                    if exists {
-                        git.fetch_branch(&repo.path, &remote.url, &repo_ref.target_branch)
-                            .ok()
-                    } else {
-                        None
-                    }
-                })
-                .is_some();
-
-            if !fetched || !git.check_branch_exists(&repo.path, &repo_ref.target_branch)? {
+        // Always try to fetch the branch from remote first to ensure we have the latest commits.
+        // If the branch doesn't exist locally after fetching, give up.
+        if let Ok(remote) = git.get_default_remote(&repo.path) {
+            let exists_on_remote = git
+                .check_remote_branch_exists(&repo.path, &remote.url, &repo_ref.target_branch)
+                .unwrap_or(false);
+            if exists_on_remote {
+                if let Err(e) =
+                    git.fetch_branch(&repo.path, &remote.url, &repo_ref.target_branch)
+                {
+                    tracing::warn!(
+                        branch = %repo_ref.target_branch,
+                        repo = %repo.name,
+                        "Failed to fetch branch from remote before creating worktree: {e}"
+                    );
+                }
+            } else if !git.check_branch_exists(&repo.path, &repo_ref.target_branch)? {
+                // Not on remote and not local — branch truly doesn't exist
                 return Err(WorkspaceError::BranchNotFound {
                     repo_name: repo.name,
                     branch: repo_ref.target_branch.clone(),
                 });
             }
+        } else if !git.check_branch_exists(&repo.path, &repo_ref.target_branch)? {
+            // No remote configured and branch doesn't exist locally
+            return Err(WorkspaceError::BranchNotFound {
+                repo_name: repo.name,
+                branch: repo_ref.target_branch.clone(),
+            });
         }
 
         if WorkspaceRepo::find_by_workspace_and_repo_id(
@@ -329,6 +329,30 @@ impl WorkspaceManager {
         );
 
         tokio::fs::create_dir_all(workspace_dir).await?;
+
+        // Fetch the target branch from remote for each repo before creating worktrees,
+        // so the worktree starts from the latest commits.
+        let git = GitService::default();
+        for input in repos {
+            if let Ok(remote) = git.get_default_remote(&input.repo.path) {
+                match git.fetch_branch(&input.repo.path, &remote.url, &input.target_branch) {
+                    Ok(()) => {
+                        info!(
+                            repo = %input.repo.name,
+                            branch = %input.target_branch,
+                            "Fetched latest branch from remote before creating worktree"
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            repo = %input.repo.name,
+                            branch = %input.target_branch,
+                            "Failed to fetch branch from remote: {e}"
+                        );
+                    }
+                }
+            }
+        }
 
         let mut created_worktrees: Vec<RepoWorktree> = Vec::new();
 
