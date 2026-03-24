@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT i.id AS \"id!: Uuid\", i.project_id AS \"project_id!: Uuid\", i.title, i.description,\n               lil.worktree_branch, lpc.encrypted_api_key\n        FROM issues i\n        JOIN linear_issue_links lil ON lil.vk_issue_id = i.id\n        JOIN projects p ON p.id = i.project_id\n        JOIN organization_member_metadata om ON om.organization_id = p.organization_id\n        JOIN linear_project_connections lpc ON lpc.project_id = i.project_id AND lpc.sync_enabled = TRUE\n        WHERE om.user_id = $1\n          AND lil.gitnexus_analyzed = FALSE\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "project_id!: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "worktree_branch",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "encrypted_api_key",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "e5eb3820ebcd2b0f38165bd17179fe4cd41c8f7682addb4caa772e55206df20e"
+}

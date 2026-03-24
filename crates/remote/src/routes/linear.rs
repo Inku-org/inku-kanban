@@ -764,23 +764,29 @@ async fn delete_vk_comment(state: &AppState, comment_id: Uuid) -> anyhow::Result
 #[serde(rename_all = "camelCase")]
 pub struct PendingAnalysisIssue {
     pub issue_id: Uuid,
+    pub project_id: Uuid,
     pub title: String,
     pub description: Option<String>,
     pub worktree_branch: Option<String>,
     pub comments: Vec<String>,
+    pub linear_api_key: Option<String>,
 }
 
 async fn list_pending_analysis(
     State(state): State<AppState>,
     Extension(ctx): Extension<RequestContext>,
 ) -> Response {
+    let enc_key = state.config().linear_encryption_key.clone();
+
     let rows = sqlx::query!(
         r#"
-        SELECT i.id AS "id!: Uuid", i.title, i.description, lil.worktree_branch
+        SELECT i.id AS "id!: Uuid", i.project_id AS "project_id!: Uuid", i.title, i.description,
+               lil.worktree_branch, lpc.encrypted_api_key
         FROM issues i
         JOIN linear_issue_links lil ON lil.vk_issue_id = i.id
         JOIN projects p ON p.id = i.project_id
         JOIN organization_member_metadata om ON om.organization_id = p.organization_id
+        JOIN linear_project_connections lpc ON lpc.project_id = i.project_id AND lpc.sync_enabled = TRUE
         WHERE om.user_id = $1
           AND lil.gitnexus_analyzed = FALSE
         "#,
@@ -800,12 +806,19 @@ async fn list_pending_analysis(
                 .fetch_all(state.pool())
                 .await
                 .unwrap_or_default();
+
+                let linear_api_key = enc_key.as_ref().and_then(|key| {
+                    crypto::decrypt(key.expose_secret(), &r.encrypted_api_key).ok()
+                });
+
                 issues.push(PendingAnalysisIssue {
                     issue_id: r.id,
+                    project_id: r.project_id,
                     title: r.title,
                     description: r.description,
                     worktree_branch: r.worktree_branch,
                     comments,
+                    linear_api_key,
                 });
             }
             Json(issues).into_response()

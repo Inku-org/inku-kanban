@@ -135,10 +135,34 @@ impl ManagedWorkspace {
             .ok_or(RepoError::NotFound)?;
 
         if !git.check_branch_exists(&repo.path, &repo_ref.target_branch)? {
-            return Err(WorkspaceError::BranchNotFound {
-                repo_name: repo.name,
-                branch: repo_ref.target_branch.clone(),
-            });
+            // Branch doesn't exist locally. Check if it exists on the default remote and fetch
+            // it if so. If there's no remote or the branch isn't on the remote, give up.
+            let fetched = git
+                .get_default_remote(&repo.path)
+                .ok()
+                .and_then(|remote| {
+                    let exists = git
+                        .check_remote_branch_exists(
+                            &repo.path,
+                            &remote.url,
+                            &repo_ref.target_branch,
+                        )
+                        .unwrap_or(false);
+                    if exists {
+                        git.fetch_branch(&repo.path, &remote.url, &repo_ref.target_branch)
+                            .ok()
+                    } else {
+                        None
+                    }
+                })
+                .is_some();
+
+            if !fetched || !git.check_branch_exists(&repo.path, &repo_ref.target_branch)? {
+                return Err(WorkspaceError::BranchNotFound {
+                    repo_name: repo.name,
+                    branch: repo_ref.target_branch.clone(),
+                });
+            }
         }
 
         if WorkspaceRepo::find_by_workspace_and_repo_id(
