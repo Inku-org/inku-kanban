@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { SpinnerIcon } from '@phosphor-icons/react';
-import { makeLocalApiRequest } from '@/shared/lib/localApiTransport';
+import { makeRequest } from '@/shared/lib/remoteApi';
 import { SlackConnectPanel } from './connect-panel';
 
 interface ConnectedState {
@@ -18,7 +18,7 @@ export function SlackIntegration({ projectId }: Props) {
   );
 
   function loadStatus() {
-    makeLocalApiRequest(`/v1/slack/status?project_id=${projectId}`)
+    makeRequest(`/v1/slack/status?project_id=${projectId}`)
       .then((r) => r.json())
       .then(
         (data: {

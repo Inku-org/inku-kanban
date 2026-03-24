@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { SpinnerIcon } from '@phosphor-icons/react';
 import { Button } from '@vibe/ui/components/Button';
 import { cn } from '@/shared/lib/utils';
-import { makeLocalApiRequest } from '@/shared/lib/localApiTransport';
+import { makeRequest } from '@/shared/lib/remoteApi';
 
 interface ConnectedState {
   connectionId: string;
@@ -31,7 +31,7 @@ export function SlackConnectPanel({
     setLoading(true);
     setError(null);
     try {
-      const res = await makeLocalApiRequest('/v1/slack/connect', {
+      const res = await makeRequest('/v1/slack/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -69,10 +69,9 @@ export function SlackConnectPanel({
     if (!connected) return;
     setLoading(true);
     try {
-      await makeLocalApiRequest(
-        `/v1/slack/connections/${connected.connectionId}`,
-        { method: 'DELETE' }
-      );
+      await makeRequest(`/v1/slack/connections/${connected.connectionId}`, {
+        method: 'DELETE',
+      });
       onDisconnected();
     } catch {
       console.error('Failed to disconnect Slack');
